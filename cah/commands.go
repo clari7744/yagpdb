@@ -1,13 +1,16 @@
 package cah
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/botlabs-gg/yagpdb/v2/bot"
 	"github.com/botlabs-gg/yagpdb/v2/commands"
 	"github.com/botlabs-gg/yagpdb/v2/lib/cardsagainstdiscord"
 	"github.com/botlabs-gg/yagpdb/v2/lib/dcmd"
+	"github.com/botlabs-gg/yagpdb/v2/lib/discordgo"
 	"github.com/botlabs-gg/yagpdb/v2/lib/dstate"
+	"github.com/botlabs-gg/yagpdb/v2/lib/jarowinkler"
 	"github.com/sirupsen/logrus"
 )
 
@@ -19,7 +22,7 @@ func (p *Plugin) AddCommands() {
 		Aliases:     []string{"c"},
 		Description: "Creates a Cards Against Humanity game in this channel, add packs after commands, or * for all packs. (-v for vote mode without a card czar).",
 		Arguments: []*dcmd.ArgDef{
-			{Name: "packs", Type: dcmd.String, Default: "main", Help: "Packs separated by space, or * for all of them."},
+			{Name: "packs", Type: dcmd.String, Default: "main", Help: "Packs separated by space, or * for all of them.", Autocomplete: true},
 		},
 		ArgSwitches: []*dcmd.ArgDef{
 			{Name: "v", Help: "Vote mode - players vote instead of having a card czar."},
@@ -40,6 +43,64 @@ func (p *Plugin) AddCommands() {
 			}
 
 			return nil, err
+		},
+		AutocompleteFunc: func(data *dcmd.Data) ([]*discordgo.ApplicationCommandOptionChoice, error) {
+			pStr := data.Args[0].Str()
+			pSelected := strings.Fields(pStr)
+			current := ""
+			if len(pSelected) > 0 {
+				current = pSelected[len(pSelected)-1] // grab the last item (current search string)
+			}
+			sort.StringSlice(pSelected).Sort()
+			selected := ""
+			for _, v := range pSelected {
+				if v == "*" {
+					return []*discordgo.ApplicationCommandOptionChoice{{Name: "*", Value: "*"}}, nil
+				}
+
+				if val, ok := cardsagainstdiscord.Packs[v]; ok {
+					selected += val.Name + " "
+				}
+
+			}
+			choices := []*discordgo.ApplicationCommandOptionChoice{{Name: "*", Value: "*"}}
+			packs := make([]string, 0, len(cardsagainstdiscord.Packs))
+		PACKLOOP:
+			for _, p := range cardsagainstdiscord.Packs {
+				for _, v := range pSelected {
+					if v == p.Name { // cut out already selected packs
+						continue PACKLOOP
+					}
+				}
+				packs = append(packs, p.Name)
+			}
+			sort.StringSlice(packs).Sort()
+
+			for _, p := range packs {
+				if len(choices) >= 25 {
+					break
+				}
+				lP := strings.ToLower(p)
+				lC := strings.ToLower(current)
+				if !strings.Contains(lP, lC) && !strings.HasSuffix(pStr, " ") && jarowinkler.Similarity([]rune(lP), []rune(lC)) < 0.7 {
+					continue
+				}
+				opt := selected
+				// this accounts for character limit
+				// however, it also breaks parsing later (aka if user tries to give an input that's too long and they click the autocomplete result,
+				// it'll fill with the ..., thus breaking the command execution later. not sure how to fix)
+				if len(selected+p) > 100 {
+					opt = opt[:97-len(p)] + "..." // if there's a function that does this already, i'd like to use that instead
+				}
+				opt += p
+
+				choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
+					Name:  opt,
+					Value: opt,
+				})
+			}
+
+			return choices, nil
 		},
 	}
 
